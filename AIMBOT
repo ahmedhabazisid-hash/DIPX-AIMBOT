@@ -1,0 +1,377 @@
+--[[\
+    DIP X - Professional Clean Aimbot Suite (Easy on the Eyes)
+]]--
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local CoreGui = game:GetService("CoreGui")
+local Lighting = game:GetService("Lighting")
+local UserInputService = game:GetService("UserInputService")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+-- إعدادات السكربت الشاملة
+getgenv().DIP_Config = {
+    AimbotEnabled = false,
+    TeamCheck = true,
+    FOVSize = 250,
+    ESPEnabled = false,
+    FPSBoostEnabled = false
+}
+
+local Config = getgenv().DIP_Config
+
+-- رسم دائرة الـ FOV
+local FOVCircle = Drawing.new("Circle")
+FOVCircle.Visible = false
+FOVCircle.Radius = Config.FOVSize
+FOVCircle.Color = Color3.fromRGB(0, 255, 200)
+FOVCircle.Thickness = 1.5
+FOVCircle.Transparency = 0.7
+FOVCircle.Filled = false
+
+-- تخزين مربعات الـ ESP
+local ESPBoxes = {}
+
+local function RemoveESP(player)
+    if ESPBoxes[player] then
+        for _, obj in pairs(ESPBoxes[player]) do
+            pcall(function() obj:Remove() end)
+        end
+        ESPBoxes[player] = nil
+    end
+end
+
+Players.PlayerRemoving:Connect(RemoveESP)
+
+-- التحقق مما إذا كان اللاعب داخل الماب (وليس تحت الأرض أو خارج الحدود)
+local function IsPlayerInBounds(rootPart)
+    if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+        return true
+    end
+    
+    local localPos = LocalPlayer.Character.HumanoidRootPart.Position
+    local targetPos = rootPart.Position
+    
+    if math.abs(targetPos.Y - localPos.Y) > 80 then
+        return false
+    end
+    
+    return true
+end
+
+-- البحث عن أقرب هدف صالح داخل الماب وضمن نطاق الـ FOV
+local function GetClosestTarget()
+    local targetPart = nil
+    local shortestDist = Config.FOVSize
+    local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+
+    for _, v in ipairs(Players:GetPlayers()) do
+        if v ~= LocalPlayer and v.Character then
+            if not Config.TeamCheck or v.Team ~= LocalPlayer.Team then
+                local humanoid = v.Character:FindFirstChildOfClass("Humanoid")
+                local rootPart = v.Character:FindFirstChild("HumanoidRootPart") or v.Character:FindFirstChild("Torso")
+                
+                if humanoid and humanoid.Health > 0 and rootPart then
+                    if IsPlayerInBounds(rootPart) then
+                        local screenPos, onScreen = Camera:WorldToViewportPoint(rootPart.Position)
+                        if onScreen then
+                            local dist = (Vector2.new(screenPos.X, screenPos.Y) - screenCenter).Magnitude
+                            if dist < shortestDist then
+                                shortestDist = dist
+                                targetPart = rootPart
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return targetPart
+end
+
+-- تفعيل الـ FPS Boost
+local function ToggleFPSBoost(state)
+    Config.FPSBoostEnabled = state
+    pcall(function()
+        if state then
+            settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+            Lighting.GlobalShadows = false
+            Lighting.FogEnd = 9e9
+            for _, v in ipairs(Lighting:GetChildren()) do
+                if v:IsA("PostEffect") or v:IsA("Sky") then
+                    v.Enabled = false
+                end
+            end
+            for _, v in ipairs(workspace:GetDescendants()) do
+                if v:IsA("BasePart") then
+                    v.Material = Enum.Material.SmoothPlastic
+                    v.Reflectance = 0
+                elseif v:IsA("Decal") or v:IsA("Texture") then
+                    v.Transparency = 1
+                end
+            end
+        else
+            Lighting.GlobalShadows = true
+            for _, v in ipairs(Lighting:GetChildren()) do
+                if v:IsA("PostEffect") or v:IsA("Sky") then
+                    v.Enabled = true
+                end
+            end
+        end
+    end)
+end
+
+-- التحقق من ضغط زر الماوس الأيمن أو شِفت
+local function IsAiming()
+    return UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) or UserInputService:IsKeyDown(Enum.KeyCode.LeftShift)
+end
+
+-- حلقة التشغيل الأساسية
+RunService.RenderStepped:Connect(function()
+    FOVCircle.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    FOVCircle.Radius = Config.FOVSize
+    FOVCircle.Visible = Config.AimbotEnabled
+
+    if Config.AimbotEnabled and IsAiming() then
+        local target = GetClosestTarget()
+        if target then
+            local currentCFrame = Camera.CFrame
+            local targetCFrame = CFrame.new(currentCFrame.Position, target.Position + Vector3.new(0, 0.5, 0))
+            Camera.CFrame = currentCFrame:Lerp(targetCFrame, 0.25)
+        end
+    end
+
+    -- رسم الـ ESP على اللاعبين
+    for _, v in ipairs(Players:GetPlayers()) do
+        if v ~= LocalPlayer then
+            local rootPart = v.Character and (v.Character:FindFirstChild("HumanoidRootPart") or v.Character:FindFirstChild("Torso"))
+            local isValid = v.Character and v.Character:FindFirstChild("Humanoid") and v.Character.Humanoid.Health > 0 and rootPart
+            
+            if Config.ESPEnabled and isValid and IsPlayerInBounds(rootPart) then
+                if not ESPBoxes[v] then
+                    local box = Drawing.new("Square")
+                    box.Visible = false
+                    box.Color = Color3.fromRGB(0, 255, 200)
+                    box.Thickness = 1.5
+                    box.Filled = false
+                    ESPBoxes[v] = {Box = box}
+                end
+                
+                local rootScreen, rootOnScreen = Camera:WorldToViewportPoint(rootPart.Position)
+                
+                if rootOnScreen then
+                    local headScreen = Camera:WorldToViewportPoint(rootPart.Position + Vector3.new(0, 2, 0))
+                    local legScreen = Camera:WorldToViewportPoint(rootPart.Position - Vector3.new(0, 2, 0))
+                    local height = math.abs(headScreen.Y - legScreen.Y)
+                    local width = height / 2
+                    
+                    local box = ESPBoxes[v].Box
+                    box.Size = Vector2.new(width, height)
+                    box.Position = Vector2.new(rootScreen.X - width / 2, headScreen.Y)
+                    box.Visible = true
+                else
+                    if ESPBoxes[v] and ESPBoxes[v].Box then
+                        ESPBoxes[v].Box.Visible = false
+                    end
+                end
+            else
+                RemoveESP(v)
+            end
+        end
+    end
+end)
+
+-- ==================== واجهة مريحة للعين ونظيفة ==================== --
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "DIP_UI_Pro"
+ScreenGui.Parent = CoreGui
+
+local ToggleButton = Instance.new("TextButton")
+ToggleButton.Parent = ScreenGui
+ToggleButton.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
+ToggleButton.Position = UDim2.new(0, 20, 0, 20)
+ToggleButton.Size = UDim2.new(0, 110, 0, 42)
+ToggleButton.Font = Enum.Font.GothamBold
+ToggleButton.Text = "DIPX Menu"
+ToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+ToggleButton.TextSize = 15
+ToggleButton.Active = true
+ToggleButton.Draggable = true
+
+local BtnCorner = Instance.new("UICorner")
+BtnCorner.CornerRadius = UDim.new(0, 8)
+BtnCorner.Parent = ToggleButton
+
+local BtnStroke = Instance.new("UIStroke")
+BtnStroke.Color = Color3.fromRGB(0, 255, 200)
+BtnStroke.Thickness = 1.5
+BtnStroke.Parent = ToggleButton
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Parent = ScreenGui
+MainFrame.BackgroundColor3 = Color3.fromRGB(12, 12, 18)
+MainFrame.Position = UDim2.new(0.5, -190, 0.5, -190)
+MainFrame.Size = UDim2.new(0, 380, 0, 400)
+MainFrame.Visible = false
+MainFrame.Active = true
+MainFrame.Draggable = true
+MainFrame.ClipsDescendants = true
+
+local MainCorner = Instance.new("UICorner")
+MainCorner.CornerRadius = UDim.new(0, 12)
+MainCorner.Parent = MainFrame
+
+local MainStroke = Instance.new("UIStroke")
+MainStroke.Color = Color3.fromRGB(0, 255, 200)
+MainStroke.Thickness = 1.5
+MainStroke.Parent = MainFrame
+
+local TitleLabel = Instance.new("TextLabel")
+TitleLabel.Parent = MainFrame
+TitleLabel.BackgroundTransparency = 1
+TitleLabel.Position = UDim2.new(0, 15, 0, 12)
+TitleLabel.Size = UDim2.new(1, -30, 0, 30)
+TitleLabel.Font = Enum.Font.GothamBold
+TitleLabel.Text = "DIPX - Aimbot"
+TitleLabel.TextColor3 = Color3.fromRGB(0, 255, 200)
+TitleLabel.TextSize = 18
+TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+local ScrollingFrame = Instance.new("ScrollingFrame")
+ScrollingFrame.Parent = MainFrame
+ScrollingFrame.Active = true
+ScrollingFrame.BackgroundTransparency = 1
+ScrollingFrame.BorderSizePixel = 0
+ScrollingFrame.Position = UDim2.new(0, 12, 0, 50)
+ScrollingFrame.Size = UDim2.new(1, -24, 1, -60)
+ScrollingFrame.CanvasSize = UDim2.new(0, 0, 0, 380)
+ScrollingFrame.ScrollBarThickness = 3
+ScrollingFrame.ScrollBarImageColor3 = Color3.fromRGB(0, 255, 200)
+
+local UIListLayout = Instance.new("UIListLayout")
+UIListLayout.Parent = ScrollingFrame
+UIListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+UIListLayout.Padding = UDim.new(0, 10)
+
+local function CreateButton(name, defaultState, callback)
+    local Btn = Instance.new("TextButton")
+    Btn.Parent = ScrollingFrame
+    Btn.BackgroundColor3 = Color3.fromRGB(22, 22, 32)
+    Btn.Size = UDim2.new(1, 0, 0, 45)
+    Btn.Font = Enum.Font.GothamMedium
+    Btn.Text = name .. ": " .. (defaultState and "ON" or "OFF")
+    Btn.TextColor3 = Color3.fromRGB(230, 230, 230) -- لون أبيض هادئ ومريح للعين
+    Btn.TextSize = 13
+
+    local Corner = Instance.new("UICorner")
+    Corner.CornerRadius = UDim.new(0, 8)
+    Corner.Parent = Btn
+
+    local Stroke = Instance.new("UIStroke")
+    Stroke.Color = defaultState and Color3.fromRGB(0, 200, 140) or Color3.fromRGB(60, 60, 80)
+    Stroke.Thickness = 1
+    Stroke.Parent = Btn
+
+    local state = defaultState
+    Btn.MouseButton1Click:Connect(function()
+        state = not state
+        Btn.Text = name .. ": " .. (state and "ON" or "OFF")
+        Stroke.Color = state and Color3.fromRGB(0, 200, 140) or Color3.fromRGB(60, 60, 80)
+        callback(state)
+    end)
+end
+
+local function CreateFOVControl()
+    local Container = Instance.new("Frame")
+    Container.Parent = ScrollingFrame
+    Container.BackgroundColor3 = Color3.fromRGB(22, 22, 32)
+    Container.Size = UDim2.new(1, 0, 0, 55)
+
+    local Corner = Instance.new("UICorner")
+    Corner.CornerRadius = UDim.new(0, 8)
+    Corner.Parent = Container
+
+    local Stroke = Instance.new("UIStroke")
+    Stroke.Color = Color3.fromRGB(0, 255, 200)
+    Stroke.Thickness = 1
+    Stroke.Parent = Container
+
+    local Label = Instance.new("TextLabel")
+    Label.Parent = Container
+    Label.BackgroundTransparency = 1
+    Label.Position = UDim2.new(0, 12, 0, 4)
+    Label.Size = UDim2.new(1, -24, 0, 22)
+    Label.Font = Enum.Font.GothamMedium
+    Label.Text = "FOV Size: " .. Config.FOVSize
+    Label.TextColor3 = Color3.fromRGB(230, 230, 230)
+    Label.TextSize = 13
+    Label.TextXAlignment = Enum.TextXAlignment.Left
+
+    local MinusBtn = Instance.new("TextButton")
+    MinusBtn.Parent = Container
+    MinusBtn.BackgroundColor3 = Color3.fromRGB(32, 32, 45)
+    MinusBtn.Position = UDim2.new(0, 10, 0, 28)
+    MinusBtn.Size = UDim2.new(0.48, 0, 0, 22)
+    MinusBtn.Font = Enum.Font.GothamMedium
+    MinusBtn.Text = "(- 50) تصغير"
+    MinusBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
+    MinusBtn.TextSize = 12
+
+    local MCorner = Instance.new("UICorner")
+    MCorner.CornerRadius = UDim.new(0, 6)
+    MCorner.Parent = MinusBtn
+
+    local PlusBtn = Instance.new("TextButton")
+    PlusBtn.Parent = Container
+    PlusBtn.BackgroundColor3 = Color3.fromRGB(32, 32, 45)
+    PlusBtn.Position = UDim2.new(0.52, 0, 0, 28)
+    PlusBtn.Size = UDim2.new(0.48, 0, 0, 22)
+    PlusBtn.Font = Enum.Font.GothamMedium
+    PlusBtn.Text = "(+ 50) تكبير"
+    PlusBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
+    PlusBtn.TextSize = 12
+
+    local PCorner = Instance.new("UICorner")
+    PCorner.CornerRadius = UDim.new(0, 6)
+    PCorner.Parent = PlusBtn
+
+    MinusBtn.MouseButton1Click:Connect(function()
+        if Config.FOVSize > 50 then
+            Config.FOVSize = Config.FOVSize - 50
+            Label.Text = "FOV Size: " .. Config.FOVSize
+        end
+    end)
+
+    PlusBtn.MouseButton1Click:Connect(function()
+        if Config.FOVSize < 800 then
+            Config.FOVSize = Config.FOVSize + 50
+            Label.Text = "FOV Size: " .. Config.FOVSize
+        end
+    end)
+end
+
+CreateButton("Aimbot (Smooth Hold)", Config.AimbotEnabled, function(state)
+    Config.AimbotEnabled = state
+end)
+
+CreateButton("ESP Boxes", Config.ESPEnabled, function(state)
+    Config.ESPEnabled = state
+end)
+
+CreateButton("Team Check", Config.TeamCheck, function(state)
+    Config.TeamCheck = state
+end)
+
+CreateButton("FPS Boost", Config.FPSBoostEnabled, function(state)
+    ToggleFPSBoost(state)
+end)
+
+CreateFOVControl()
+
+ToggleButton.MouseButton1Click:Connect(function()
+    MainFrame.Visible = not MainFrame.Visible
+end)
+
+print("DIPX Pro Suite Loaded Successfully!")
